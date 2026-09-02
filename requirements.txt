@@ -5,4 +5,4 @@ numpy
 plotly
 scipy
 pytz
-streamlit-autorefresh
+scikit-learn
