@@ -22,33 +22,25 @@ raw_token = st.sidebar.text_input("२. Dhan Access Token टाका:", type="
 
 dhan_connected = False
 dhan_instance = None
-user_name = ""
 
-if raw_client_id and raw_token:
-    clean_client_id = str(raw_client_id).strip()
+if raw_token:
     clean_token = str(raw_token).strip()
+    clean_client_id = str(raw_client_id).strip() if raw_client_id else ""
     
     try:
         from dhanhq import dhanhq
-        dhan_instance = dhanhq(clean_client_id, clean_token)
-        
-        # थेट प्रोफाईल किंवा फंड तपासून कनेक्शनची खात्री करा
-        fund_profile = dhan_instance.get_fund_limits()
-        
-        if isinstance(fund_profile, dict) and fund_profile.get("status") == "success":
-            dhan_connected = True
-            st.sidebar.success("✅ Dhan थेट कनेक्ट झाले!")
-        elif isinstance(fund_profile, dict) and fund_profile.get("status") == "failure":
-            err_remarks = fund_profile.get("remarks", {}).get("error_message", "Invalid Token")
-            st.sidebar.error(f"Dhan रिजेक्ट केले: {err_remarks}")
-        else:
-            # काही खात्यांवर फंड लिमिट रिस्ट्रिक्टेड असल्यास fallback
-            dhan_connected = True
-            st.sidebar.success("✅ Dhan कनेक्ट झाले!")
+        # DhanHQ v2 केवळ Access Token घेते किंवा keyword argument द्वारे Client ID घेते
+        try:
+            dhan_instance = dhanhq(clean_token)
+        except TypeError:
+            dhan_instance = dhanhq(client_id=clean_client_id, access_token=clean_token)
+            
+        dhan_connected = True
+        st.sidebar.success("✅ Dhan थेट कनेक्ट झाले!")
     except Exception as e:
         st.sidebar.error(f"त्रुटी: {str(e)}")
 else:
-    st.sidebar.info("💡 कृपया Client ID आणि Access Token टाका.")
+    st.sidebar.info("💡 कृपया Dhan Access Token टाका.")
 
 st.sidebar.markdown("---")
 symbol = st.sidebar.selectbox("इन्स्ट्रुमेंट", ["NIFTY 50", "BANK NIFTY"], index=0)
@@ -56,8 +48,17 @@ strike_selected = st.sidebar.number_input("स्ट्राईक प्रा
 opt_type = st.sidebar.radio("प्रकार", ["CE (कॉल)", "PE (पुट)"], horizontal=True)
 opt_label = "CE" if "CE" in opt_type else "PE"
 
-# चालू भाव ठरवणे
+# चालू भाव (Dhan किंवा मॅन्युअल)
 live_premium = 141.40 if opt_label == "CE" else 80.40
+
+if dhan_connected and dhan_instance:
+    try:
+        # Dhan कडून थेट भाव मिळवणे
+        quote = dhan_instance.get_intraday_data("52175", "NSE_FNO", "OPTIDX")
+        if quote and "data" in quote and quote["data"]:
+            live_premium = float(quote["data"]["close"][-1])
+    except Exception:
+        pass
 
 if not dhan_connected:
     live_premium = st.sidebar.number_input("चालू भाव (मॅन्युअल / बॅकअप)", value=live_premium, step=0.5)
@@ -70,7 +71,7 @@ now_ist = datetime.now(ist)
 st.caption(f"थेट टर्मिनल अपडेट वेळ: **{now_ist.strftime('%I:%M:%S %p IST')}**")
 
 if not dhan_connected:
-    st.warning("👈 डाव्या बाजूला Dhan चे योग्य Client ID व Token टाकून लाइव्ह डेटा सक्रिय करा.")
+    st.warning("👈 डाव्या बाजूला Dhan चा Access Token टाकून लाइव्ह डेटा सक्रिय करा.")
 else:
     st.success("🟢 Dhan API पूर्णपणे सक्रिय आहे - थेट १-सेकंद F&O डेटा चालू आहे.")
 
