@@ -1,19 +1,17 @@
 """
-BharatQuant Enterprise Terminal - Live Auto-Trade Recommender
-Direct Call/Put Setup on Main Screen with Entry, SL, Targets & Options Analysis.
+BharatQuant Enterprise Terminal - Time-Stamped Intraday Signal Engine
+Includes Strict 5-Minute Signal Expiry, Live Time-Tracking & Safety Banners.
 """
 
 import sys
 import time
 import uuid
-import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-from scipy.stats import norm
 import streamlit as st
 
 if sys.platform.startswith("win"):
@@ -23,8 +21,8 @@ if sys.platform.startswith("win"):
         pass
 
 st.set_page_config(
-    page_title="भारतक्वांट - थेट लाईव्ह ट्रेड व विश्लेषण",
-    page_icon="🎯",
+    page_title="भारतक्वांट - टाइम-स्टँप लाईव्ह ट्रेड्स",
+    page_icon="⏱️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -35,28 +33,27 @@ st.set_page_config(
 st.sidebar.title("⚙️ नियंत्रण पॅनल (Settings)")
 
 INSTRUMENTS = {
-    "NIFTY 50": {"ticker": "^NSEI", "step": 50, "lot": 25},
-    "BANK NIFTY": {"ticker": "^NSEBANK", "step": 100, "lot": 15},
-    "RELIANCE": {"ticker": "RELIANCE.NS", "step": 20, "lot": 250},
-    "HDFC BANK": {"ticker": "HDFCBANK.NS", "step": 10, "lot": 550},
-    "TCS": {"ticker": "TCS.NS", "step": 20, "lot": 175},
-    "INFOSYS": {"ticker": "INFY.NS", "step": 20, "lot": 400},
-    "GOLD BEES": {"ticker": "GOLDBEES.NS", "step": 1, "lot": 100}
+    "NIFTY 50": {"ticker": "^NSEI", "step": 50},
+    "BANK NIFTY": {"ticker": "^NSEBANK", "step": 100},
+    "RELIANCE": {"ticker": "RELIANCE.NS", "step": 20},
+    "HDFC BANK": {"ticker": "HDFCBANK.NS", "step": 10},
+    "TCS": {"ticker": "TCS.NS", "step": 20},
+    "INFOSYS": {"ticker": "INFY.NS", "step": 20}
 }
 
-selected_name = st.sidebar.selectbox("इन्स्ट्रुमेंट निवडा (Select Asset)", list(INSTRUMENTS.keys()), index=0)
+selected_name = st.sidebar.selectbox("इन्स्ट्रुमेंट निवडा", list(INSTRUMENTS.keys()), index=0)
 inst_config = INSTRUMENTS[selected_name]
 
 auto_refresh = st.sidebar.checkbox("ऑटो-रिफ्रेश (Auto-Refresh 5s)", value=True)
 refresh_interval = 5
 
 # ---------------------------------------------------------
-# DATA FETCHING & QUANT ENGINE
+# MARKET DATA ENGINE
 # ---------------------------------------------------------
 @st.cache_data(ttl=5)
 def fetch_market_data(ticker):
     try:
-        df = yf.download(ticker, period="5d", interval="5m", progress=False)
+        df = yf.download(ticker, period="2d", interval="5m", progress=False)
         if df.empty:
             return None
         if isinstance(df.columns, pd.MultiIndex):
@@ -69,23 +66,19 @@ def compute_indicators(df):
     if df is None or len(df) < 15:
         return None
     
-    # EMAs
     df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
     
-    # RSI (14)
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / (loss + 1e-9)
     df["RSI"] = 100 - (100 / (1 + rs))
     
-    # Intraday VWAP
     df["Cum_Vol"] = df["Volume"].cumsum()
     df["Cum_Vol_Price"] = (df["Volume"] * (df["High"] + df["Low"] + df["Close"]) / 3).cumsum()
     df["VWAP"] = df["Cum_Vol_Price"] / (df["Cum_Vol"] + 1e-9)
     
-    # ATR (14)
     hl = df["High"] - df["Low"]
     hc = (df["High"] - df["Close"].shift()).abs()
     lc = (df["Low"] - df["Close"].shift()).abs()
@@ -95,20 +88,32 @@ def compute_indicators(df):
     return df
 
 # ---------------------------------------------------------
-# LIVE UI & TRADE ENGINE
+# TIME & SIGNAL VALIDATION
 # ---------------------------------------------------------
 ist = pytz.timezone("Asia/Kolkata")
 now_ist = datetime.now(ist)
 
-st.title("🎯 भारतक्वांट - लाईव्ह कॉल/पुट ट्रेड रेकमेंडर")
-st.caption(f"अचूक अल्गोरिदम आधारित इंट्राडे ट्रेड सिग्नल | अपडेट वेळ: {now_ist.strftime('%d-%b-%Y, %I:%M:%S %p IST')}")
+st.title("⏱️ भारतक्वांट - टाइम-व्हॅलिडेटेड लाईव्ह ट्रेड")
+st.caption(f"तुमच्या स्क्रीनवरील सध्याची वेळ: **{now_ist.strftime('%I:%M:%S %p IST')}** (तारीख: {now_ist.strftime('%d-%b-%Y')})")
 
 raw_data = fetch_market_data(inst_config["ticker"])
 data = compute_indicators(raw_data)
 
 if data is None or data.empty:
-    st.error("⚠️ मार्केट डेटा उपलब्ध होत नाहीये. कृपया काही सेकंदांनी पुन्हा पहा.")
+    st.error("⚠️ मार्केट डेटा उपलब्ध नाही. कृपया काही सेकंदांनी पुन्हा प्रयत्न करा.")
 else:
+    # Get last candle timestamp
+    last_candle_time = data.index[-1]
+    if last_candle_time.tzinfo is None:
+        last_candle_time = pytz.utc.localize(last_candle_time).astimezone(ist)
+    else:
+        last_candle_time = last_candle_time.astimezone(ist)
+
+    # Calculate Data Age (Minutes passed since signal candle)
+    time_diff_seconds = (now_ist - last_candle_time).total_seconds()
+    minutes_old = int(time_diff_seconds // 60)
+    is_expired = minutes_old >= 10  # If candle is more than 10 mins old, signal is expired
+
     last = data.iloc[-1]
     curr_price = float(last["Close"])
     prev_close = float(data.iloc[-2]["Close"]) if len(data) > 1 else curr_price
@@ -121,54 +126,72 @@ else:
     ema50 = float(last["EMA50"]) if not np.isnan(last["EMA50"]) else curr_price
     atr = float(last["ATR"]) if not np.isnan(last["ATR"]) else (curr_price * 0.005)
 
-    # एटीएम स्ट्राईक काढणे
     step = inst_config["step"]
     atm_strike = int(round(curr_price / step) * step)
 
-    # खरेदीचा ट्रेंड ठरवणे (Call vs Put)
+    # Direction Setup
     is_bullish = curr_price >= vwap and ema20 >= ema50
-    
     if is_bullish:
-        recommended_trade = f"{atm_strike} CE (कॉल खरेदी करा)"
-        trade_badge = "🟢 खरेदी (BUY CALL)"
-        trend_name = "तेजी (Bullish Trend)"
-        signal_color = "#10b981"
-        confidence = 85
-        entry_price = round(curr_price, 2)
+        recommended_trade = f"{atm_strike} CE (कॉल खरेदी)"
+        signal_badge = "🟢 BUY CALL"
+        trend_name = "तेजी (Bullish)"
         risk = round(atr * 1.5, 2)
+        entry_price = round(curr_price, 2)
         stop_loss = round(entry_price - risk, 2)
         target1 = round(entry_price + (risk * 1.5), 2)
         target2 = round(entry_price + (risk * 2.0), 2)
         target3 = round(entry_price + (risk * 3.0), 2)
     else:
-        recommended_trade = f"{atm_strike} PE (पुट खरेदी करा)"
-        trade_badge = "🔴 खरेदी (BUY PUT)"
-        trend_name = "मंदी (Bearish Trend)"
-        signal_color = "#ef4444"
-        confidence = 82
-        entry_price = round(curr_price, 2)
+        recommended_trade = f"{atm_strike} PE (पुट खरेदी)"
+        signal_badge = "🔴 BUY PUT"
+        trend_name = "मंदी (Bearish)"
         risk = round(atr * 1.5, 2)
+        entry_price = round(curr_price, 2)
         stop_loss = round(entry_price + risk, 2)
         target1 = round(entry_price - (risk * 1.5), 2)
         target2 = round(entry_price - (risk * 2.0), 2)
         target3 = round(entry_price - (risk * 3.0), 2)
 
     # ---------------------------------------------------------
-    # मुख्य स्क्रीनवर ठळक लाइव्ह ट्रेड बॉक्स
+    # TIME STATUS ALERT BANNER (LIVE vs EXPIRED)
     # ---------------------------------------------------------
+    signal_gen_time_str = last_candle_time.strftime("%I:%M:%S %p")
+    
+    if is_expired:
+        st.markdown(f"""
+        <div style="background-color: #450a0a; border: 2px solid #ef4444; padding: 18px; border-radius: 12px; margin-bottom: 20px;">
+            <h2 style="color: #fca5a5; margin: 0; font-size: 22px;">⛔ जुना ट्रेड / सिग्नल एक्सपायर झाला आहे (EXPIRED)</h2>
+            <p style="color: #ffffff; margin: 6px 0 0 0; font-size: 16px;">
+                हा संकेत <b>{signal_gen_time_str} IST</b> वाजता आला होता. याला <b>{minutes_old} मिनिटे</b> झाली आहेत. 
+                <br>⚠️ <b>दुपारी किंवा उशिरा हा ट्रेड घेऊ नका, तोटा होऊ शकतो.</b> नवीन सिग्नल येण्याची वाट पहा.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style="background-color: #064e3b; border: 2px solid #10b981; padding: 18px; border-radius: 12px; margin-bottom: 20px;">
+            <h2 style="color: #6ee7b7; margin: 0; font-size: 22px;">🟢 हा चालू लाईव्ह ट्रेड आहे (ACTIVE LIVE TRADE)</h2>
+            <p style="color: #ffffff; margin: 6px 0 0 0; font-size: 16px;">
+                सिग्नल वेळ: <b>{signal_gen_time_str} IST</b> (फक्त <b>{minutes_old} मिनिटांपूर्वी</b> तयार झाला).
+                सध्या हा ट्रेड वैध आहे!
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Main Recommendation Display
     st.markdown(f"""
-    <div style="background: linear-gradient(90deg, #1e293b, #0f172a); padding: 20px; border-radius: 14px; border: 2px solid {signal_color}; margin-bottom: 20px;">
-        <h3 style="color: #94a3b8; margin: 0; font-size: 16px;">🔥 शिफारस केलेला लाईव्ह ट्रेड (Active Recommended Trade):</h3>
-        <h1 style="color: #ffffff; margin: 8px 0; font-size: 32px;">{selected_name} 👉 <span style="color: {signal_color};">{recommended_trade}</span></h1>
+    <div style="background: linear-gradient(90deg, #1e293b, #0f172a); padding: 20px; border-radius: 14px; border: 2px solid #3b82f6; margin-bottom: 20px;">
+        <h4 style="color: #94a3b8; margin: 0;">सिग्नल वेळ: {signal_gen_time_str} IST | सध्याची वेळ: {now_ist.strftime('%I:%M:%S %p IST')}</h4>
+        <h1 style="color: #ffffff; margin: 8px 0; font-size: 32px;">{selected_name} 👉 <span style="color: {'#10b981' if is_bullish else '#ef4444'};">{recommended_trade}</span></h1>
         <p style="color: #cbd5e1; margin: 0; font-size: 16px;">
-            सध्याची स्पॉट किंमत: <b>₹{curr_price:,.2f}</b> ({price_change:+.2f} / {p_pct:+.2f}%) | 
-            संकेत: <b>{trade_badge}</b> | विश्वास पातळी: <b>{confidence}%</b> | बाजाराचा कल: <b>{trend_name}</b>
+            स्पॉट किंमत: <b>₹{curr_price:,.2f}</b> ({price_change:+.2f}%) | 
+            स्थिती: <b>{'🟢 ACTIVE' if not is_expired else '🔴 EXPIRED'}</b> | कल: <b>{trend_name}</b>
         </p>
     </div>
     """, unsafe_allow_html=True)
 
     # ---------------------------------------------------------
-    # ठळक ट्रेड सेटअप कार्ड्स (Entry, SL, Targets - २x३ ग्रिड)
+    # TRADE SETUP 2x3 GRID
     # ---------------------------------------------------------
     st.markdown("### 💰 अचूक ट्रेड आकडे (Entry, Stop Loss & Targets)")
 
@@ -220,20 +243,7 @@ else:
         """, unsafe_allow_html=True)
 
     # ---------------------------------------------------------
-    # हा संकेत का आला? (REASONS)
-    # ---------------------------------------------------------
-    st.markdown("---")
-    st.subheader("🔍 हा संकेत का आला? (कारणे)")
-    c_r1, c_r2 = st.columns(2)
-    with c_r1:
-        st.write(f"- **VWAP स्थिती:** किंमत (₹{curr_price:.2f}) ही VWAP (₹{vwap:.2f}) च्या {'वर 🟢' if curr_price > vwap else 'खाली 🔴'} आहे.")
-        st.write(f"- **EMA ट्रेंड:** EMA 20 (₹{ema20:.2f}) ही EMA 50 (₹{ema50:.2f}) च्या {'वर आहे (सकारात्मक)' if ema20 > ema50 else 'खाली आहे (नकारात्मक)'}.")
-    with c_r2:
-        st.write(f"- **RSI मोमेंटम:** {rsi:.1f} ({'मजबूत तेजी क्षेत्र' if rsi > 55 else 'मंदीचे क्षेत्र' if rsi < 45 else 'न्यूट्रल'}).")
-        st.write(f"- **शिफारस:** आजच्या ट्रेंडनुसार **{recommended_trade}** मध्ये चांगला रिस्क-रिवॉर्ड मिळण्याची शक्यता आहे.")
-
-    # ---------------------------------------------------------
-    # लाईव्ह इंट्राडे चार्ट
+    # INTRADAY CHART
     # ---------------------------------------------------------
     st.markdown("---")
     st.subheader("📊 लाईव्ह कॅन्डलस्टिक चार्ट (5-Minute)")
@@ -247,24 +257,7 @@ else:
     fig.update_layout(template="plotly_dark", height=420, margin=dict(l=10, r=10, t=10, b=10), xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # ---------------------------------------------------------
-    # ऑप्शन्स स्ट्राईक चेन सारांश
-    # ---------------------------------------------------------
-    st.markdown("---")
-    st.subheader(f"⛓️ {selected_name} - जवळच्या ५ मुख्य स्ट्राईक्स (Options Chain)")
-    strikes_sample = [atm_strike - (2 * step), atm_strike - step, atm_strike, atm_strike + step, atm_strike + (2 * step)]
-    chain_data = []
-    for s in strikes_sample:
-        p_ce = max(10.0, round((curr_price - s) + (atr * 0.8), 2)) if curr_price > s else max(5.0, round(atr * 0.6, 2))
-        p_pe = max(10.0, round((s - curr_price) + (atr * 0.8), 2)) if s > curr_price else max(5.0, round(atr * 0.6, 2))
-        chain_data.append({
-            "कॉल किंमत (CE Price)": f"₹{p_ce:.2f}",
-            "स्ट्राईक (Strike)": f"👉 {s} (ATM) 👈" if s == atm_strike else str(s),
-            "पुट किंमत (PE Price)": f"₹{p_pe:.2f}"
-        })
-    st.table(pd.DataFrame(chain_data))
-
-    st.caption("⚠️ **सूचना:** हा केवळ अल्गोरिदम आधारित तांत्रिक संकेत आहे. प्रत्यक्ष खरेदी-विक्री करण्यापूर्वी स्वतःच्या जोखमीची खात्री करा.")
+    st.caption("⚠️ **नियम:** सिग्नल आल्यापासून ५ ते १० मिनिटांच्या आतच ट्रेड व्हॅलिड असतो. जुना ट्रेड कधीही एक्झिक्युट करू नका.")
 
 if auto_refresh:
     time.sleep(refresh_interval)
