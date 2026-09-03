@@ -1,6 +1,6 @@
 """
-BharatQuant Enterprise Terminal - Live Dhan Option Chain Sync
-Direct Dynamic LTP Retrieval from DhanHQ API (Real-Time Tick Engine)
+BharatQuant Enterprise Terminal - Auto-Authenticated Direct Dhan Engine
+Reads permanent secrets directly from Streamlit configuration.
 """
 
 import sys
@@ -25,16 +25,22 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# SIDEBAR CONTROLS & DHAN API
+# AUTO-LOGIN VIA STREAMLIT SECRETS
 # ---------------------------------------------------------
 st.sidebar.title("⚡ ब्रोकर लाईव्ह API")
 
-st.sidebar.subheader("🔗 DhanHQ थेट कनेक्शन")
-raw_client_id = st.sidebar.text_input("१. Dhan Client ID टाका:", type="password", placeholder="१० अंकी Client ID")
-raw_token = st.sidebar.text_input("२. Dhan Access Token टाका:", type="password", placeholder="Access Token")
-
-clean_client_id = re.sub(r'[^\x20-\x7E]', '', str(raw_client_id)).strip() if raw_client_id else ""
-clean_token = re.sub(r'[^\x20-\x7E]', '', str(raw_token)).strip() if raw_token else ""
+# Secrets मधून आपोआप क्रेडेंशियल्स घेणे
+if "DHAN_CLIENT_ID" in st.secrets and "DHAN_ACCESS_TOKEN" in st.secrets:
+    clean_client_id = re.sub(r'[^\x20-\x7E]', '', str(st.secrets["DHAN_CLIENT_ID"])).strip()
+    clean_token = re.sub(r'[^\x20-\x7E]', '', str(st.secrets["DHAN_ACCESS_TOKEN"])).strip()
+    st.sidebar.caption("🔑 Secrets मधून क्रेडेंशियल्स आपोआप लोड झाले आहेत.")
+else:
+    # Secrets नसल्यास मॅन्युअल बॅकअप इनपुट
+    st.sidebar.subheader("🔗 DhanHQ थेट कनेक्शन")
+    raw_client_id = st.sidebar.text_input("Dhan Client ID:", type="password")
+    raw_token = st.sidebar.text_input("Dhan Access Token:", type="password")
+    clean_client_id = re.sub(r'[^\x20-\x7E]', '', str(raw_client_id)).strip() if raw_client_id else ""
+    clean_token = re.sub(r'[^\x20-\x7E]', '', str(raw_token)).strip() if raw_token else ""
 
 dhan_connected = False
 headers = {}
@@ -47,7 +53,6 @@ if clean_client_id and clean_token:
         "Accept": "application/json"
     }
     try:
-        # फंड लिमिट तपासून थेट कनेक्शनची खात्री
         res_auth = requests.get("https://api.dhan.co/fundlimit", headers=headers, timeout=4)
         if res_auth.status_code == 200:
             dhan_connected = True
@@ -56,36 +61,29 @@ if clean_client_id and clean_token:
             st.sidebar.error("त्रुटी: Client ID किंवा Token अमान्य आहे.")
     except Exception as e:
         st.sidebar.error(f"कनेक्शन त्रुटी: {str(e)}")
-else:
-    st.sidebar.info("💡 कृपया Client ID आणि Access Token टाका.")
 
 st.sidebar.markdown("---")
 symbol = st.sidebar.selectbox("इन्स्ट्रुमेंट निवडा", ["NIFTY 50", "BANK NIFTY"], index=0)
 step_val = 50 if symbol == "NIFTY 50" else 100
-underlying_scrip = 13 if symbol == "NIFTY 50" else 25  # Dhan Index Scrip IDs
+underlying_scrip = 13 if symbol == "NIFTY 50" else 25
 
 # ---------------------------------------------------------
-# DHAN OPTION CHAIN LIVE ENGINE
+# LIVE OPTION CHAIN DATA
 # ---------------------------------------------------------
 spot_price = 23873.45 if symbol == "NIFTY 50" else 51200.00
 chain_data = {}
-live_expiry = "08-Sep-2026"
-data_source = "🟡 मॅन्युअल / बॅकअप मोड"
+data_source = "🟡 मॅन्युअल / ऑफलाइन मोड"
 
 if dhan_connected:
     try:
-        # Dhan Option Chain API Call
         chain_payload = {
             "UnderlyingScrip": underlying_scrip,
             "UnderlyingSeg": "IDX_I"
         }
         res_chain = requests.post("https://api.dhan.co/v2/optionchain", json=chain_payload, headers=headers, timeout=4)
-        
         if res_chain.status_code == 200:
             oc_json = res_chain.json().get("data", {})
             spot_price = float(oc_json.get("last_price", spot_price))
-            
-            # स्ट्राइकनुसार CE/PE चा खरा भाव मॅप करणे
             oc_list = oc_json.get("oc", {})
             for strk_str, strk_info in oc_list.items():
                 s_price = float(strk_str)
@@ -93,25 +91,20 @@ if dhan_connected:
                     "ce_ltp": float(strk_info.get("ce", {}).get("last_price", 0.0)),
                     "pe_ltp": float(strk_info.get("pe", {}).get("last_price", 0.0))
                 }
-            data_source = "🟢 DhanHQ थेट Live Option Chain"
+            data_source = "🟢 DhanHQ Live Option Chain"
     except Exception:
         pass
 
-# चालू ATM स्ट्राइक स्वयंचलित काढणे
 auto_atm_strike = int(round(spot_price / step_val) * step_val)
-
 strike_selected = st.sidebar.number_input("स्ट्राईक प्राईस", value=auto_atm_strike, step=step_val)
 opt_type = st.sidebar.radio("प्रकार", ["CE (कॉल - तेजी)", "PE (पुट - मंदी)"], horizontal=True)
 opt_label = "CE" if "CE" in opt_type else "PE"
 
-# चालू खरा भाव निश्चित करणे
+# चालू खरा भाव मिळवणे
 if dhan_connected and strike_selected in chain_data:
-    if opt_label == "CE":
-        live_premium = chain_data[strike_selected]["ce_ltp"]
-    else:
-        live_premium = chain_data[strike_selected]["pe_ltp"]
+    live_premium = chain_data[strike_selected]["ce_ltp"] if opt_label == "CE" else chain_data[strike_selected]["pe_ltp"]
 else:
-    # बॅकअप भाव (तुमच्या Dhan स्क्रीनशॉटनुसार थेट मॅच केलेले)
+    # बॅकअप भाव
     if strike_selected == 23900:
         live_premium = 108.50 if opt_label == "CE" else 105.35
     elif strike_selected == 23850:
@@ -119,26 +112,17 @@ else:
     else:
         live_premium = 108.50
 
-# मॅन्युअल बदल पर्याय (API बंद असल्यास)
 if not dhan_connected:
-    live_premium = st.sidebar.number_input("चालू खरा भाव (मॅन्युअल LTP)", value=live_premium, step=0.5, format="%.2f")
+    live_premium = st.sidebar.number_input("चालू भाव (मॅन्युअल)", value=live_premium, step=0.5, format="%.2f")
 
-auto_refresh = st.sidebar.checkbox("ऑटो-रिफ्रेश सुरू ठेवा (5s)", value=True)
+auto_refresh = st.sidebar.checkbox("ऑटो-रिफ्रेश (5s)", value=True)
 
 # ---------------------------------------------------------
-# 5 AI AGENTS INTRADAY CALCULATION
+# AI AGENTS LEVELS
 # ---------------------------------------------------------
-vwap_val = round(live_premium * 0.99, 2)
-supertrend_val = round(live_premium * 1.05, 2)
-
-# १. ट्रेंड एजंट
-trend_bullish = live_premium >= vwap_val
-# २. अचूक ब्रेकआऊट ट्रिगर
-trigger_buy = round(live_premium * 1.025, 2)  # २.५% वर गेल्यावर ब्रेकआऊट निश्चित
-# ३. रिस्क मॅनेजमेंट (८% स्टॉप लॉस)
+trigger_buy = round(live_premium * 1.025, 2)
 sl = round(trigger_buy * 0.92, 2)
 risk = round(trigger_buy - sl, 2)
-# ४. टार्गेट्स (1:1.5, 1:2, 1:3)
 t1 = round(trigger_buy + (risk * 1.5), 2)
 t2 = round(trigger_buy + (risk * 2.0), 2)
 t3 = round(trigger_buy + (risk * 3.0), 2)
@@ -147,12 +131,11 @@ ist = pytz.timezone("Asia/Kolkata")
 now_ist = datetime.now(ist)
 
 # ---------------------------------------------------------
-# TERMINAL UI
+# TERMINAL DISPLAY
 # ---------------------------------------------------------
-st.title("⚡ भारतक्वांट - धन (Dhan) थेट F&O टर्मिनल")
+st.title("⚡ भारतक्वांट - थेट F&O टर्मिनल")
 st.caption(f"डेटा स्त्रोत: **{data_source}** | निफ्टी स्पॉट: **₹{spot_price:,.2f}** | वेळ: **{now_ist.strftime('%I:%M:%S %p IST')}**")
 
-# MAIN RECOMMENDATION BANNER
 st.markdown(f"""
 <div style="background-color: #0f172a; border: 2px solid #3b82f6; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
     <h3 style="color: #94a3b8; margin: 0; font-size: 16px;">🎯 सक्रिय ट्रेड सेटअप:</h3>
@@ -167,7 +150,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# TRADE SETUP CARDS (2x3 GRID)
+# 2x3 GRID CARDS
 st.markdown("### 💰 अचूक ट्रेड आकडे (Trade Levels)")
 
 r1c1, r1c2, r1c3 = st.columns(3)
@@ -216,20 +199,6 @@ with r2c3:
         <h2 style="color: #ffffff; margin: 4px 0 0 0; font-size: 26px;">1 : 2.0</h2>
     </div>
     """, unsafe_allow_html=True)
-
-# ---------------------------------------------------------
-# 5 AI AGENTS LIVE VERIFICATION
-# ---------------------------------------------------------
-st.markdown("---")
-st.subheader("🕵️‍♂️ ५ AI एजंट्सचे थेट विश्लेषण")
-
-c_ag1, c_ag2 = st.columns(2)
-with c_ag1:
-    st.info(f"**एजंट १ (Market Trend):** निफ्टी स्पॉट भाव ₹{spot_price:,.2f} वर आहे. बाजाराचा कल स्थिर आहे.")
-    st.warning(f"**एजंट २ (Breakout Filter):** चालू भावात (₹{live_premium:.2f}) घाई करू नका. मोमेंटम सुरू झाल्यावरच एन्ट्री होईल.")
-with c_ag2:
-    st.success(f"**एजंट ३ (Trigger Planner):** ₹{trigger_buy:.2f} ओलांडल्यास १ लॉटसाठी ₹{risk * 25:.2f} च्या रिस्कवर ट्रेड वैध ठरेल.")
-    st.info("**एजंट ४ व ५ (Gatekeeper):** रिस्क-टू-रिवॉर्ड 1:2.0 असल्यामुळे भांडवल सुरक्षित राहील.")
 
 if auto_refresh:
     time.sleep(5)
