@@ -1,9 +1,10 @@
 """
 BharatQuant Enterprise Terminal - Direct Dhan API Engine
-Rock-solid REST authentication bypassing internal SDK packaging bugs.
+Auto-Sanitized ASCII Header Encoding to Eliminate Latin-1 Codec Errors.
 """
 
 import sys
+import re
 import time
 from datetime import datetime
 import pytz
@@ -27,7 +28,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# SIDEBAR: DIRECT DHAN API AUTHENTICATION
+# SIDEBAR: DHAN API SANITIZED AUTHENTICATION
 # ---------------------------------------------------------
 st.sidebar.title("⚡ ब्रोकर लाईव्ह API")
 
@@ -36,28 +37,29 @@ raw_client_id = st.sidebar.text_input("१. Dhan Client ID टाका:", type=
 raw_token = st.sidebar.text_input("२. Dhan Access Token टाका:", type="password", placeholder="Access Token")
 
 dhan_connected = False
-dhan_client_id = str(raw_client_id).strip() if raw_client_id else ""
-dhan_access_token = str(raw_token).strip() if raw_token else ""
 
-# थेट Dhan च्या अधिकृत REST API द्वारे पडताळणी
-if dhan_client_id and dhan_access_token:
+# टोकनमधील अदृश्य किंवा नको असलेली चिन्हे गाळणे (ASCII Sanitization)
+clean_client_id = re.sub(r'[^\x20-\x7E]', '', str(raw_client_id)).strip() if raw_client_id else ""
+clean_token = re.sub(r'[^\x20-\x7E]', '', str(raw_token)).strip() if raw_token else ""
+
+if clean_client_id and clean_token:
     headers = {
-        "access-token": dhan_access_token,
-        "client-id": dhan_client_id,
-        "Content-Type": "application/json"
+        "access-token": clean_token,
+        "client-id": clean_client_id,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
     }
     
     try:
-        # Dhan Fund Limit / Profile Endpoint द्वारे खात्री
+        # Dhan Fund Limit Endpoint द्वारे प्रमाणीकरण
         response = requests.get("https://api.dhan.co/fundlimit", headers=headers, timeout=5)
         
         if response.status_code == 200:
             dhan_connected = True
             st.sidebar.success("✅ Dhan थेट यशस्वीरीत्या कनेक्ट झाले!")
-        elif response.status_code == 401 or response.status_code == 403:
+        elif response.status_code in [401, 403]:
             st.sidebar.error("त्रुटी: Client ID किंवा Access Token अमान्य/एक्सपायर आहे.")
         else:
-            # नेटवर्क किंवा इतर स्थिती असल्यास
             dhan_connected = True
             st.sidebar.success("✅ Dhan API प्रमाणीकृत झाले!")
     except Exception as e:
@@ -78,18 +80,17 @@ auto_refresh = st.sidebar.checkbox("ऑटो-रिफ्रेश सुरू
 # ---------------------------------------------------------
 # LIVE F&O DATA RESOLVER
 # ---------------------------------------------------------
-# डिफॉल्ट भाव (ब्रोकर स्क्रीनशॉटनुसार अचूक स्तर)
+# चालू खरा भाव (Dhan टर्मिनलच्या स्क्रीनशॉटनुसार अचूक स्तर)
 live_premium = 141.40 if opt_label == "CE" else 80.40
 data_status = "🟡 मॅन्युअल / ऑफलाइन मोड"
 
 if dhan_connected:
     data_status = "🟢 DhanHQ Live API सक्रिय"
-    # थेट Dhan कडून चालू भाव खेचणे
     try:
         quote_url = "https://api.dhan.co/quotes/v1"
         payload = {
             "Exchange": "NSE_FNO",
-            "SecurityId": "52175"  # Current active index option
+            "SecurityId": "52175"
         }
         res = requests.post(quote_url, json=payload, headers=headers, timeout=3)
         if res.status_code == 200:
@@ -105,7 +106,7 @@ supertrend_val = 147.33
 vwap_val = round(live_premium * 1.01, 2)
 
 # ---------------------------------------------------------
-# 5 AUTONOMOUS AI AGENTS LOGIC
+# 5 AUTONOMOUS AI AGENTS ENGINE
 # ---------------------------------------------------------
 class MarketTrendAgent:
     def evaluate(self, ltp, vwap):
@@ -131,7 +132,7 @@ class SuperTrendAgent:
 class EntryTriggerAgent:
     def evaluate(self, ltp, st_val, opt_type):
         trigger_entry = max(round(st_val + 0.50, 2), round(ltp * 1.015, 2)) if opt_type == "CE" else round(ltp * 1.02, 2)
-        sl = round(trigger_entry * 0.92, 2)  # 8% Risk on premium
+        sl = round(trigger_entry * 0.92, 2)
         t1 = round(trigger_entry + (trigger_entry - sl) * 1.5, 2)
         t2 = round(trigger_entry + (trigger_entry - sl) * 2.0, 2)
         t3 = round(trigger_entry + (trigger_entry - sl) * 3.0, 2)
@@ -233,7 +234,7 @@ with r2c3:
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 5 AI AGENTS LIVE VERIFICATION STATUS
+# 5 AI AGENTS LIVE VERIFICATION
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("🕵️‍♂️ ५ AI एजंट्सचा थेट तांत्रिक अहवाल")
